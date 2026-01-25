@@ -1,0 +1,8 @@
+*_Dataset.*
+
+*.jpg
+*.mp4
+
+detect/
+
+fod_env/
