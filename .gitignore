@@ -7,4 +7,4 @@ detect/
 
 fod_env/
 
-.*ipynb
+*.ipynb
