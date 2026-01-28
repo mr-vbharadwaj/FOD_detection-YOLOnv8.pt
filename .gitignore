@@ -3,7 +3,7 @@
 *.jpg
 *.mp4
 
-detect/
+predict/
 
 fod_env/
 
