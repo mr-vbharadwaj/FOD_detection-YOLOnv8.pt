@@ -21,30 +21,24 @@ st.write(
 )
 
 # -------------------------------------------------
-# CONSTANTS (TUNABLE PERFORMANCE KNOBS)
+# CONSTANTS
 # -------------------------------------------------
 
 MODEL_PATH = "runs/detect/runs_fod/yolov8n_fod_v1/weights/best.pt"
 
-CONF_THRESHOLD = 0.4      # Detection confidence threshold
-IMG_SIZE = 416            # Lower resolution → faster inference
-FRAME_SKIP = 3            # Process every Nth frame (performance boost)
-DRAW_BOXES = True         # Set False for max speed (backend mode)
+CONF_THRESHOLD = 0.4
+IMG_SIZE = 416
+DRAW_BOXES = True
 
 TEMP_DIR = "temp"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 # -------------------------------------------------
-# LOAD MODEL (CACHED — VERY IMPORTANT)
+# LOAD MODEL (CACHED)
 # -------------------------------------------------
 
 @st.cache_resource
 def load_model():
-    """
-    Load YOLO model ONCE.
-    Streamlit reruns scripts frequently — caching prevents reloading
-    the model every time, which is expensive.
-    """
     return YOLO(MODEL_PATH)
 
 # -------------------------------------------------
@@ -59,81 +53,62 @@ uploaded_video = st.file_uploader(
 if uploaded_video is not None:
     input_path = os.path.join(TEMP_DIR, uploaded_video.name)
 
-    # Save uploaded video to disk
     with open(input_path, "wb") as f:
         f.write(uploaded_video.read())
 
     st.success("✅ Video uploaded successfully")
 
-    # -------------------------------------------------
-    # RUN DETECTION BUTTON
-    # -------------------------------------------------
-
     if st.button("▶ Run FOD Detection"):
         model = load_model()
 
-        # Open input video
+        # Open video ONLY to read metadata
         cap = cv2.VideoCapture(input_path)
-
         if not cap.isOpened():
-            st.error("❌ Failed to open video file")
+            st.error("❌ Failed to open video")
             st.stop()
 
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
 
-        # Setup output video
+        # Output writer
         output_path = os.path.join(TEMP_DIR, "fod_output.mp4")
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
-        # Tracking state
         unique_fod_ids = set()
 
-        # UI elements
         progress_bar = st.progress(0)
         status_text = st.empty()
 
         processed_frames = 0
         start_time = time.time()
 
-        st.info("🚀 Processing video… This may take a few minutes.")
+        st.info("🚀 Processing video…")
 
         # -------------------------------------------------
-        # YOLOv8 + BYTE TRACKING LOOP
+        # YOLO TRACKING LOOP (NO FRAME SKIPPING)
         # -------------------------------------------------
 
-        for idx, result in enumerate(
-            model.track(
-                source=input_path,
-                conf=CONF_THRESHOLD,
-                imgsz=IMG_SIZE,
-                tracker="bytetrack.yaml",
-                stream=True,
-                verbose=False
-            )
+        for result in model.track(
+            source=input_path,
+            conf=CONF_THRESHOLD,
+            imgsz=IMG_SIZE,
+            tracker="bytetrack.yaml",
+            stream=True,
+            verbose=False
         ):
-            # Skip frames for performance
-            if idx % FRAME_SKIP != 0:
-                continue
-
             processed_frames += 1
 
-            # Collect UNIQUE object IDs
             boxes = result.boxes
             if boxes.id is not None:
-                for track_id in boxes.id.tolist():
-                    unique_fod_ids.add(int(track_id))
+                for tid in boxes.id.tolist():
+                    unique_fod_ids.add(int(tid))
 
-            # Draw output frame
-            if DRAW_BOXES:
-                frame = result.plot()
-            else:
-                frame = result.orig_img
+            frame = result.plot() if DRAW_BOXES else result.orig_img
 
-            # Overlay unique count
             cv2.putText(
                 frame,
                 f"Unique FOD Count: {len(unique_fod_ids)}",
@@ -146,19 +121,15 @@ if uploaded_video is not None:
 
             out.write(frame)
 
-            # UI updates (throttled to avoid lag)
             if processed_frames % 10 == 0:
-                progress_bar.progress(min(processed_frames / frame_count, 1.0))
+                progress_bar.progress(
+                    min(processed_frames / total_frames, 1.0)
+                )
                 status_text.text(
-                    f"Processed {processed_frames} frames | "
+                    f"Frame {processed_frames}/{total_frames} | "
                     f"Unique FOD: {len(unique_fod_ids)}"
                 )
 
-        # -------------------------------------------------
-        # CLEANUP & RESULTS
-        # -------------------------------------------------
-
-        cap.release()
         out.release()
 
         elapsed = time.time() - start_time
@@ -168,17 +139,15 @@ if uploaded_video is not None:
 
         st.markdown("### 📊 Results Summary")
         st.write(f"**Unique FOD detected:** {len(unique_fod_ids)}")
-        st.write(f"**Processed frames:** {processed_frames}")
-        st.write(f"**Average FPS:** {avg_fps:.2f}")
+        st.write(f"**Total frames processed:** {processed_frames}")
+        st.write(f"**Average inference FPS:** {avg_fps:.2f}")
 
-        # Show output video
         st.video(output_path)
 
-        # Download button
         with open(output_path, "rb") as f:
             st.download_button(
-                label="⬇ Download Output Video",
-                data=f,
-                file_name="fod_detection_output.mp4",
-                mime="video/mp4"
+                "⬇ Download Output Video",
+                f,
+                "fod_detection_output.mp4",
+                "video/mp4"
             )
